@@ -1,5 +1,9 @@
 # Youtube Downloader in C#
 
+# Installation
+Download and install [ffmpeg](https://ffmpeg.org/download.html)
+
+# Usage
 
 Usage: Program.exe <youtube_url> [-d directory] [-f filename]
 
