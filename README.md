@@ -14,9 +14,13 @@ Arguments:
   -f filename    Output filename without extension (optional, default: video title)
 
 Example:
+```shell
   ./youtubedl "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+```
+```shell
   ./youtubedl "https://www.youtube.com/watch?v=dQw4w9WgXcQ" -d "C:\Downloads" -f "my_video"
-  
+```
+
 # Combinning Video & Audio Part (for mac)
 1. install ffmpeg `brew install ffmpeg`
 2. Inside `FileMerger.cs` change the variable `folder` to the correct Directory
