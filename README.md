@@ -8,6 +8,6 @@ This Code is written with Claude and ChatGPT.
 
 # Combinning Video & Audio Part (for mac)
 1. install ffmpeg `brew install ffmpeg`
-2. change the variable `folder` to the correct Directory
+2. Inside `FileMerger.cs` change the variable `folder` to the correct Directory
 3. all files with the same name will be merged together. Video must be `.mp4` and audio must `.mp3` or `.webm`
 4. A directory will be created with the merged files
