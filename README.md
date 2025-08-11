@@ -21,10 +21,3 @@ Example:
   ./youtubedl "https://www.youtube.com/watch?v=dQw4w9WgXcQ" -d "C:\Downloads" -f "my_video"
 ```
 
-# Combinning Video & Audio Part (for mac)
-1. install ffmpeg `brew install ffmpeg`
-2. Inside `FileMerger.cs` change the variable `folder` to the correct Directory
-3. all files with the same name will be merged together. Video must be `.mp4` and audio must `.mp3` or `.webm`
-4. A directory will be created with the merged files
-
-
