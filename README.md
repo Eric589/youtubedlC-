@@ -11,3 +11,7 @@ This Code is written with Claude and ChatGPT.
 2. Inside `FileMerger.cs` change the variable `folder` to the correct Directory
 3. all files with the same name will be merged together. Video must be `.mp4` and audio must `.mp3` or `.webm`
 4. A directory will be created with the merged files
+
+# TODO
+1. Change Code to use given arguments for path and url
+2. change Program.cs to make a selection to download both audio and video in one go.
