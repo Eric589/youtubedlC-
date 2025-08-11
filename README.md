@@ -1,10 +1,5 @@
 # Youtube Downloader in C#
-This Code is written with Claude and ChatGPT.
 
-
-
-# Usage
-========================================
 
 Usage: Program.exe <youtube_url> [-d directory] [-f filename]
 
