@@ -28,7 +28,7 @@ namespace YouTubeDownloader
         private static string youtubeUrl;
         private static string downloadDirectory = Environment.CurrentDirectory;
         private static string outputFilename;
-        
+
         private static readonly Stopwatch downloadTimer = new Stopwatch();
 
         private static readonly Regex progressRegex = new Regex(
@@ -90,7 +90,9 @@ namespace YouTubeDownloader
 
                 // Separate video and audio formats (skip combined formats)
                 var videoFormats = allFormats.Where(f => f.IsVideoOnly).ToList();
-                var audioFormats = allFormats.Where(f => f.IsAudioOnly).ToList();
+                var audioFormats = allFormats
+                    .Where(f => f.IsAudioOnly && string.Equals(f.Extension, "webm", StringComparison.OrdinalIgnoreCase))
+                    .ToList();
 
                 // Get video title for default filename
                 if (string.IsNullOrEmpty(outputFilename))
@@ -111,7 +113,7 @@ namespace YouTubeDownloader
                     Console.WriteLine("\n=== VIDEO SELECTION ===");
                     DisplayVideoFormats(videoFormats);
                     Console.WriteLine($"{videoFormats.Count + 1}. Skip video (audio only)");
-                    
+
                     int videoSelection = GetUserSelection(videoFormats.Count + 1, "video format");
                     if (videoSelection <= videoFormats.Count)
                     {
@@ -136,7 +138,7 @@ namespace YouTubeDownloader
                     Console.WriteLine("\n=== AUDIO SELECTION ===");
                     DisplayAudioFormats(audioFormats);
                     Console.WriteLine($"{audioFormats.Count + 1}. Skip audio (video only)");
-                    
+
                     int audioSelection = GetUserSelection(audioFormats.Count + 1, "audio format");
                     if (audioSelection <= audioFormats.Count)
                     {
@@ -174,13 +176,15 @@ namespace YouTubeDownloader
                     if (selectedVideoFormat != null)
                     {
                         Console.WriteLine($"\n=== Downloading Video Format: {selectedVideoFormat} ===");
-                        videoFile = await DownloadFormat(youtubeUrl, selectedVideoFormat, tempFolder, outputFilename, "video");
+                        videoFile = await DownloadFormat(youtubeUrl, selectedVideoFormat, tempFolder, outputFilename,
+                            "video");
                     }
 
                     if (selectedAudioFormat != null)
                     {
                         Console.WriteLine($"\n=== Downloading Audio Format: {selectedAudioFormat} ===");
-                        audioFile = await DownloadFormat(youtubeUrl, selectedAudioFormat, tempFolder, outputFilename, "audio");
+                        audioFile = await DownloadFormat(youtubeUrl, selectedAudioFormat, tempFolder, outputFilename,
+                            "audio");
                     }
 
                     // Handle final output
@@ -191,7 +195,7 @@ namespace YouTubeDownloader
                         // Merge video and audio - use video's extension to avoid re-encoding
                         string outputExtension = selectedVideoExtension ?? "mp4";
                         finalOutputPath = Path.Combine(downloadDirectory, outputFilename + "." + outputExtension);
-                        
+
                         Console.WriteLine("\n=== Merging Video and Audio ===");
                         Console.WriteLine($"Output will be saved as: {outputExtension} (matching video format)");
                         await MergeVideoAudio(videoFile, audioFile, finalOutputPath);
@@ -200,14 +204,16 @@ namespace YouTubeDownloader
                     else if (videoFile != null)
                     {
                         // Video only - copy to final location
-                        finalOutputPath = Path.Combine(downloadDirectory, outputFilename + Path.GetExtension(videoFile));
+                        finalOutputPath = Path.Combine(downloadDirectory,
+                            outputFilename + Path.GetExtension(videoFile));
                         File.Move(videoFile, finalOutputPath);
                         Console.WriteLine($"Video-only file created: {finalOutputPath}");
                     }
                     else if (audioFile != null)
                     {
                         // Audio only - copy to final location  
-                        finalOutputPath = Path.Combine(downloadDirectory, outputFilename + Path.GetExtension(audioFile));
+                        finalOutputPath = Path.Combine(downloadDirectory,
+                            outputFilename + Path.GetExtension(audioFile));
                         File.Move(audioFile, finalOutputPath);
                         Console.WriteLine($"Audio-only file created: {finalOutputPath}");
                     }
@@ -276,7 +282,8 @@ namespace YouTubeDownloader
             Console.WriteLine();
             Console.WriteLine("Example:");
             Console.WriteLine("  Program.exe \"https://www.youtube.com/watch?v=dQw4w9WgXcQ\"");
-            Console.WriteLine("  Program.exe \"https://www.youtube.com/watch?v=dQw4w9WgXcQ\" -d \"C:\\Downloads\" -f \"my_video\"");
+            Console.WriteLine(
+                "  Program.exe \"https://www.youtube.com/watch?v=dQw4w9WgXcQ\" -d \"C:\\Downloads\" -f \"my_video\"");
         }
 
         private static string SanitizeFilename(string filename)
@@ -286,6 +293,7 @@ namespace YouTubeDownloader
             {
                 filename = filename.Replace(c, '_');
             }
+
             return filename.Trim();
         }
 
@@ -498,10 +506,11 @@ namespace YouTubeDownloader
             }
         }
 
-        private static async Task<string> DownloadFormat(string url, string formatId, string directory, string filename, string type)
+        private static async Task<string> DownloadFormat(string url, string formatId, string directory, string filename,
+            string type)
         {
             string outputTemplate = Path.Combine(directory, filename + "_" + type + ".%(ext)s");
-            
+
             var process = new Process
             {
                 StartInfo = new ProcessStartInfo
@@ -516,7 +525,7 @@ namespace YouTubeDownloader
             };
 
             await RunDownloadProcess(process);
-            
+
             // Find the downloaded file
             string[] possibleExtensions = { ".mp4", ".webm", ".mkv", ".flv", ".avi", ".mp3", ".m4a", ".webm", ".ogg" };
             foreach (string ext in possibleExtensions)
@@ -525,7 +534,7 @@ namespace YouTubeDownloader
                 if (File.Exists(possiblePath))
                     return possiblePath;
             }
-            
+
             throw new FileNotFoundException($"Downloaded {type} file not found");
         }
 
@@ -556,7 +565,7 @@ namespace YouTubeDownloader
 
             await process.WaitForExitAsync();
             await Task.WhenAll(outputTask, errorTask);
-            
+
             Console.WriteLine(); // Move to next line after progress bar
 
             if (process.ExitCode != 0)
@@ -580,8 +589,14 @@ namespace YouTubeDownloader
                 }
             };
 
-            process.OutputDataReceived += (sender, e) => { if (e.Data != null) Console.WriteLine(e.Data); };
-            process.ErrorDataReceived += (sender, e) => { if (e.Data != null) Console.WriteLine(e.Data); };
+            process.OutputDataReceived += (sender, e) =>
+            {
+                if (e.Data != null) Console.WriteLine(e.Data);
+            };
+            process.ErrorDataReceived += (sender, e) =>
+            {
+                if (e.Data != null) Console.WriteLine(e.Data);
+            };
 
             process.Start();
             process.BeginOutputReadLine();
@@ -657,7 +672,8 @@ namespace YouTubeDownloader
             }
         }
 
-        private static void ShowProgressBar(double percentage, string downloaded, string total, string speed, string eta, string elapsed)
+        private static void ShowProgressBar(double percentage, string downloaded, string total, string speed,
+            string eta, string elapsed)
         {
             int barWidth = 40;
             int completed = (int)(percentage / 100.0 * barWidth);
@@ -665,16 +681,23 @@ namespace YouTubeDownloader
             if (completed > barWidth) completed = barWidth;
 
             string progressBar = "[" +
-                new string('=', completed) +
-                (completed < barWidth ? ">" : "") +
-                new string('-', Math.Max(0, barWidth - completed - (completed < barWidth ? 1 : 0))) +
-                "]";
+                                 new string('=', completed) +
+                                 (completed < barWidth ? ">" : "") +
+                                 new string('-', Math.Max(0, barWidth - completed - (completed < barWidth ? 1 : 0))) +
+                                 "]";
 
             string etaPart = !string.IsNullOrEmpty(eta) ? $" ETA:{eta}" : "";
-            string progressText = $"{progressBar} {percentage:F1}% ({downloaded}/{total}) {speed}{etaPart} Elapsed:{elapsed}".Trim();
+            string progressText =
+                $"{progressBar} {percentage:F1}% ({downloaded}/{total}) {speed}{etaPart} Elapsed:{elapsed}".Trim();
 
             int consoleWidth = 80;
-            try { consoleWidth = Console.WindowWidth; } catch { }
+            try
+            {
+                consoleWidth = Console.WindowWidth;
+            }
+            catch
+            {
+            }
 
             if (progressText.Length > consoleWidth - 1)
                 progressText = progressText.Substring(0, Math.Max(0, consoleWidth - 4)) + "...";
@@ -692,7 +715,8 @@ namespace YouTubeDownloader
             var match = Regex.Match(total, @"(?<value>\d+(?:[.,]\d+)?)(?<unit>[KMGT]?i?B)", RegexOptions.IgnoreCase);
             if (!match.Success) return $"{percentage:F1}%";
 
-            double.TryParse(match.Groups["value"].Value.Replace(",", "."), NumberStyles.Any, CultureInfo.InvariantCulture, out double totalValue);
+            double.TryParse(match.Groups["value"].Value.Replace(",", "."), NumberStyles.Any,
+                CultureInfo.InvariantCulture, out double totalValue);
             string unit = match.Groups["unit"].Value;
 
             double downloadedValue = (percentage / 100.0) * totalValue;
