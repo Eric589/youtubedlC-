@@ -9,9 +9,9 @@ YouTube Video Downloader with Auto-Merge
 Usage: Program.exe <youtube_url> [-d directory] [-f filename]
 
 Arguments:
-  youtube_url    YouTube video URL (required)
-  -d directory   Download directory (optional, default: current directory)
-  -f filename    Output filename without extension (optional, default: video title)
+ - youtube_url    YouTube video URL (required)
+ - -d directory   Download directory (optional, default: current directory)
+ - -f filename    Output filename without extension (optional, default: video title)
 
 Example:
 ```shell
