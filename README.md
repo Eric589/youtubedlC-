@@ -4,7 +4,6 @@ This Code is written with Claude and ChatGPT.
 
 
 # Usage
-YouTube Video Downloader with Auto-Merge
 ========================================
 Usage: Program.exe <youtube_url> [-d directory] [-f filename]
 
