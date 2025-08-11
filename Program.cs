@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
@@ -18,16 +19,16 @@ namespace YouTubeDownloader
         public long? Filesize { get; set; }
         public string Vcodec { get; set; }
         public string Acodec { get; set; }
+        public bool IsVideoOnly => Vcodec != "none" && Acodec == "none";
+        public bool IsAudioOnly => Vcodec == "none" && Acodec != "none";
     }
 
     public class Program
     {
-        // Change this URL to the YouTube video you want to download
-        private const string YOUTUBE_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
-
-        // Change this path to where you want to store downloaded files
-        private const string DOWNLOAD_DIRECTORY = "/Path/To/Dir";
-
+        private static string youtubeUrl;
+        private static string downloadDirectory = Environment.CurrentDirectory;
+        private static string outputFilename;
+        
         private static readonly Stopwatch downloadTimer = new Stopwatch();
 
         private static readonly Regex progressRegex = new Regex(
@@ -42,19 +43,27 @@ namespace YouTubeDownloader
 
         public static async Task Main(string[] args)
         {
-            Console.WriteLine("YouTube Video Downloader");
-            Console.WriteLine("========================");
-            Console.WriteLine($"URL: {YOUTUBE_URL}");
-            Console.WriteLine($"Download Directory: {DOWNLOAD_DIRECTORY}");
-            Console.WriteLine();
+            Console.WriteLine("YouTube Video Downloader with Auto-Merge");
+            Console.WriteLine("========================================");
 
             try
             {
-                // Create download directory if it doesn't exist
-                if (!Directory.Exists(DOWNLOAD_DIRECTORY))
+                if (!ParseArguments(args))
                 {
-                    Directory.CreateDirectory(DOWNLOAD_DIRECTORY);
-                    Console.WriteLine($"Created download directory: {DOWNLOAD_DIRECTORY}");
+                    ShowUsage();
+                    return;
+                }
+
+                Console.WriteLine($"URL: {youtubeUrl}");
+                Console.WriteLine($"Download Directory: {downloadDirectory}");
+                Console.WriteLine($"Output Filename: {outputFilename ?? "Auto (from video title)"}");
+                Console.WriteLine();
+
+                // Create download directory if it doesn't exist
+                if (!Directory.Exists(downloadDirectory))
+                {
+                    Directory.CreateDirectory(downloadDirectory);
+                    Console.WriteLine($"Created download directory: {downloadDirectory}");
                 }
 
                 // Check if yt-dlp is available
@@ -71,27 +80,149 @@ namespace YouTubeDownloader
 
                 // Get available formats
                 Console.WriteLine("Fetching available video formats...");
-                var formats = await GetAvailableFormats(YOUTUBE_URL);
+                var allFormats = await GetAvailableFormats(youtubeUrl);
 
-                if (formats.Count == 0)
+                if (allFormats.Count == 0)
                 {
                     Console.WriteLine("No formats found or error occurred.");
                     return;
                 }
 
-                // Display formats
-                DisplayFormats(formats);
+                // Separate video and audio formats (skip combined formats)
+                var videoFormats = allFormats.Where(f => f.IsVideoOnly).ToList();
+                var audioFormats = allFormats.Where(f => f.IsAudioOnly).ToList();
 
-                // Get user selection
-                int selectedIndex = GetUserSelection(formats.Count);
-                var selectedFormat = formats[selectedIndex - 1];
+                // Get video title for default filename
+                if (string.IsNullOrEmpty(outputFilename))
+                {
+                    outputFilename = await GetVideoTitle(youtubeUrl);
+                    outputFilename = SanitizeFilename(outputFilename);
+                    Console.WriteLine($"Using video title as filename: {outputFilename}");
+                }
 
-                // Download the selected format
-                Console.WriteLine($"\nDownloading format: {selectedFormat.FormatId} ({selectedFormat.Resolution})");
-                Console.WriteLine($"Saving to: {DOWNLOAD_DIRECTORY}");
-                await DownloadVideo(YOUTUBE_URL, selectedFormat.FormatId, DOWNLOAD_DIRECTORY);
+                // User selections
+                string selectedVideoFormat = null;
+                string selectedAudioFormat = null;
+                string selectedVideoExtension = null;
 
-                Console.WriteLine("Download completed!");
+                // Video selection
+                if (videoFormats.Any())
+                {
+                    Console.WriteLine("\n=== VIDEO SELECTION ===");
+                    DisplayVideoFormats(videoFormats);
+                    Console.WriteLine($"{videoFormats.Count + 1}. Skip video (audio only)");
+                    
+                    int videoSelection = GetUserSelection(videoFormats.Count + 1, "video format");
+                    if (videoSelection <= videoFormats.Count)
+                    {
+                        var selectedVideoFormatObj = videoFormats[videoSelection - 1];
+                        selectedVideoFormat = selectedVideoFormatObj.FormatId;
+                        selectedVideoExtension = selectedVideoFormatObj.Extension;
+                        Console.WriteLine($"Selected video format: {selectedVideoFormat} ({selectedVideoExtension})");
+                    }
+                    else
+                    {
+                        Console.WriteLine("Skipping video download (audio only)");
+                    }
+                }
+                else
+                {
+                    Console.WriteLine("No video-only formats available.");
+                }
+
+                // Audio selection
+                if (audioFormats.Any())
+                {
+                    Console.WriteLine("\n=== AUDIO SELECTION ===");
+                    DisplayAudioFormats(audioFormats);
+                    Console.WriteLine($"{audioFormats.Count + 1}. Skip audio (video only)");
+                    
+                    int audioSelection = GetUserSelection(audioFormats.Count + 1, "audio format");
+                    if (audioSelection <= audioFormats.Count)
+                    {
+                        selectedAudioFormat = audioFormats[audioSelection - 1].FormatId;
+                        Console.WriteLine($"Selected audio format: {selectedAudioFormat}");
+                    }
+                    else
+                    {
+                        Console.WriteLine("Skipping audio download (video only)");
+                    }
+                }
+                else
+                {
+                    Console.WriteLine("No audio-only formats available.");
+                }
+
+                if (selectedVideoFormat == null && selectedAudioFormat == null)
+                {
+                    Console.WriteLine("No formats selected. Exiting.");
+                    return;
+                }
+
+                // Create temporary download folder
+                string tempFolder = Path.Combine(downloadDirectory, "temp_download");
+                if (Directory.Exists(tempFolder))
+                    Directory.Delete(tempFolder, true);
+                Directory.CreateDirectory(tempFolder);
+
+                try
+                {
+                    // Download selected formats
+                    string videoFile = null;
+                    string audioFile = null;
+
+                    if (selectedVideoFormat != null)
+                    {
+                        Console.WriteLine($"\n=== Downloading Video Format: {selectedVideoFormat} ===");
+                        videoFile = await DownloadFormat(youtubeUrl, selectedVideoFormat, tempFolder, outputFilename, "video");
+                    }
+
+                    if (selectedAudioFormat != null)
+                    {
+                        Console.WriteLine($"\n=== Downloading Audio Format: {selectedAudioFormat} ===");
+                        audioFile = await DownloadFormat(youtubeUrl, selectedAudioFormat, tempFolder, outputFilename, "audio");
+                    }
+
+                    // Handle final output
+                    string finalOutputPath;
+
+                    if (videoFile != null && audioFile != null)
+                    {
+                        // Merge video and audio - use video's extension to avoid re-encoding
+                        string outputExtension = selectedVideoExtension ?? "mp4";
+                        finalOutputPath = Path.Combine(downloadDirectory, outputFilename + "." + outputExtension);
+                        
+                        Console.WriteLine("\n=== Merging Video and Audio ===");
+                        Console.WriteLine($"Output will be saved as: {outputExtension} (matching video format)");
+                        await MergeVideoAudio(videoFile, audioFile, finalOutputPath);
+                        Console.WriteLine($"Merged file created: {finalOutputPath}");
+                    }
+                    else if (videoFile != null)
+                    {
+                        // Video only - copy to final location
+                        finalOutputPath = Path.Combine(downloadDirectory, outputFilename + Path.GetExtension(videoFile));
+                        File.Move(videoFile, finalOutputPath);
+                        Console.WriteLine($"Video-only file created: {finalOutputPath}");
+                    }
+                    else if (audioFile != null)
+                    {
+                        // Audio only - copy to final location  
+                        finalOutputPath = Path.Combine(downloadDirectory, outputFilename + Path.GetExtension(audioFile));
+                        File.Move(audioFile, finalOutputPath);
+                        Console.WriteLine($"Audio-only file created: {finalOutputPath}");
+                    }
+                }
+                finally
+                {
+                    // Clean up temp folder
+                    if (Directory.Exists(tempFolder))
+                    {
+                        Directory.Delete(tempFolder, true);
+                        Console.WriteLine("Temporary files cleaned up.");
+                    }
+                }
+
+                Console.WriteLine("Process completed successfully!");
             }
             catch (Exception ex)
             {
@@ -100,6 +231,91 @@ namespace YouTubeDownloader
 
             Console.WriteLine("\nPress any key to exit...");
             Console.ReadKey();
+        }
+
+        private static bool ParseArguments(string[] args)
+        {
+            if (args.Length == 0)
+                return false;
+
+            youtubeUrl = args[0];
+            if (!IsValidYouTubeUrl(youtubeUrl))
+                return false;
+
+            for (int i = 1; i < args.Length - 1; i++)
+            {
+                switch (args[i].ToLower())
+                {
+                    case "-d":
+                        if (i + 1 < args.Length)
+                            downloadDirectory = args[++i];
+                        break;
+                    case "-f":
+                        if (i + 1 < args.Length)
+                            outputFilename = args[++i];
+                        break;
+                }
+            }
+
+            return true;
+        }
+
+        private static bool IsValidYouTubeUrl(string url)
+        {
+            return url.Contains("youtube.com/watch") || url.Contains("youtu.be/");
+        }
+
+        private static void ShowUsage()
+        {
+            Console.WriteLine("Usage: Program.exe <youtube_url> [-d directory] [-f filename]");
+            Console.WriteLine();
+            Console.WriteLine("Arguments:");
+            Console.WriteLine("  youtube_url    YouTube video URL (required)");
+            Console.WriteLine("  -d directory   Download directory (optional, default: current directory)");
+            Console.WriteLine("  -f filename    Output filename without extension (optional, default: video title)");
+            Console.WriteLine();
+            Console.WriteLine("Example:");
+            Console.WriteLine("  Program.exe \"https://www.youtube.com/watch?v=dQw4w9WgXcQ\"");
+            Console.WriteLine("  Program.exe \"https://www.youtube.com/watch?v=dQw4w9WgXcQ\" -d \"C:\\Downloads\" -f \"my_video\"");
+        }
+
+        private static string SanitizeFilename(string filename)
+        {
+            char[] invalidChars = Path.GetInvalidFileNameChars();
+            foreach (char c in invalidChars)
+            {
+                filename = filename.Replace(c, '_');
+            }
+            return filename.Trim();
+        }
+
+        private static async Task<string> GetVideoTitle(string url)
+        {
+            try
+            {
+                var process = new Process
+                {
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = "yt-dlp",
+                        Arguments = $"--get-title \"{url}\"",
+                        UseShellExecute = false,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        CreateNoWindow = true
+                    }
+                };
+
+                process.Start();
+                string title = await process.StandardOutput.ReadToEndAsync();
+                await process.WaitForExitAsync();
+
+                return process.ExitCode == 0 ? title.Trim() : "downloaded_video";
+            }
+            catch
+            {
+                return "downloaded_video";
+            }
         }
 
         private static async Task<bool> IsYtDlpAvailable()
@@ -191,7 +407,7 @@ namespace YouTubeDownloader
                                         : "none"
                                 };
 
-                                // Only add formats that are either video+audio or audio-only
+                                // Only add formats that are either video+audio, video-only, or audio-only
                                 if (videoFormat.Vcodec != "none" || videoFormat.Acodec != "none")
                                 {
                                     formats.Add(videoFormat);
@@ -216,34 +432,39 @@ namespace YouTubeDownloader
             return formats;
         }
 
-        private static void DisplayFormats(List<VideoFormat> formats)
+        private static void DisplayVideoFormats(List<VideoFormat> formats)
         {
-            Console.WriteLine("\nAvailable formats:");
-            Console.WriteLine("==================");
-            Console.WriteLine(
-                $"{"#",-3} {"ID",-8} {"Extension",-10} {"Resolution",-15} {"Size",-12} {"Video",-10} {"Audio",-10} {"Note",-20}");
-            Console.WriteLine(new string('-', 100));
+            Console.WriteLine("\nAvailable video-only formats:");
+            Console.WriteLine("============================");
+            Console.WriteLine($"{"#",-3} {"ID",-8} {"Extension",-10} {"Resolution",-15} {"Size",-12} {"Note",-20}");
+            Console.WriteLine(new string('-', 80));
 
             for (int i = 0; i < formats.Count; i++)
             {
                 var format = formats[i];
                 string sizeStr = format.Filesize.HasValue ? FormatBytes(format.Filesize.Value) : "Unknown";
 
-                string videoCodec = GetCodecDisplay(format.Vcodec);
-                string audioCodec = GetCodecDisplay(format.Acodec);
-
                 Console.WriteLine(
-                    $"{i + 1,-3} {format.FormatId,-8} {format.Extension,-10} {format.Resolution,-15} {sizeStr,-12} {videoCodec,-10} {audioCodec,-10} {format.Note,-20}");
+                    $"{i + 1,-3} {format.FormatId,-8} {format.Extension,-10} {format.Resolution,-15} {sizeStr,-12} {format.Note,-20}");
             }
         }
 
-        private static string GetCodecDisplay(string codec)
+        private static void DisplayAudioFormats(List<VideoFormat> formats)
         {
-            if (string.IsNullOrEmpty(codec) || codec == "none")
-                return "❌";
+            Console.WriteLine("\nAvailable audio-only formats:");
+            Console.WriteLine("============================");
+            Console.WriteLine($"{"#",-3} {"ID",-8} {"Extension",-10} {"Quality",-15} {"Size",-12} {"Note",-20}");
+            Console.WriteLine(new string('-', 80));
 
-            // Show checkmark for available codecs
-            return "✅";
+            for (int i = 0; i < formats.Count; i++)
+            {
+                var format = formats[i];
+                string sizeStr = format.Filesize.HasValue ? FormatBytes(format.Filesize.Value) : "Unknown";
+                string quality = format.Note.Contains("kbps") ? format.Note : "Unknown quality";
+
+                Console.WriteLine(
+                    $"{i + 1,-3} {format.FormatId,-8} {format.Extension,-10} {quality,-15} {sizeStr,-12} {format.Note,-20}");
+            }
         }
 
         private static string FormatBytes(long bytes)
@@ -261,11 +482,11 @@ namespace YouTubeDownloader
             return $"{size:F1} {suffixes[suffixIndex]}";
         }
 
-        private static int GetUserSelection(int maxOptions)
+        private static int GetUserSelection(int maxOptions, string selectionType)
         {
             while (true)
             {
-                Console.Write($"\nSelect format to download (1-{maxOptions}): ");
+                Console.Write($"\nSelect {selectionType} to download (1-{maxOptions}): ");
                 string input = Console.ReadLine();
 
                 if (int.TryParse(input, out int selection) && selection >= 1 && selection <= maxOptions)
@@ -277,181 +498,205 @@ namespace YouTubeDownloader
             }
         }
 
-        private static async Task DownloadVideo(string url, string formatId, string downloadDirectory)
+        private static async Task<string> DownloadFormat(string url, string formatId, string directory, string filename, string type)
         {
-            try
+            string outputTemplate = Path.Combine(directory, filename + "_" + type + ".%(ext)s");
+            
+            var process = new Process
             {
-                var process = new Process
+                StartInfo = new ProcessStartInfo
                 {
-                    StartInfo = new ProcessStartInfo
-                    {
-                        FileName = "yt-dlp",
-                        Arguments =
-                            $"-f {formatId} -o \"{Path.Combine(downloadDirectory, "%(title)s.%(ext)s")}\" --newline \"{url}\"",
-                        UseShellExecute = false,
-                        RedirectStandardOutput = true,
-                        RedirectStandardError = true,
-                        CreateNoWindow = true
-                    }
-                };
-
-                // Merge stderr into stdout so we get everything
-                process.StartInfo.RedirectStandardError = true;
-                process.StartInfo.RedirectStandardOutput = true;
-
-                process.Start();
-
-                var progressRegex =
-                    new Regex(
-                        @"\[download\]\s+(\d+(?:\.\d+)?)%.*?(\d+(?:\.\d+)?(?:[KMGT]iB|[KMGT]B|B))/(\d+(?:\.\d+)?(?:[KMGT]iB|[KMGT]B|B)).*?(\d+(?:\.\d+)?(?:[KMGT]iB|[KMGT]B)/s)");
-                DateTime lastUpdate = DateTime.MinValue;
-
-                // Read both stdout & stderr together
-                var reader = Task.Run(async () =>
-                {
-                    using var combined = Console.OpenStandardOutput();
-                    using var outputReader = process.StandardOutput;
-                    using var errorReader = process.StandardError;
-
-                    while (!process.HasExited)
-                    {
-                        while (!outputReader.EndOfStream)
-                        {
-                            var line = await outputReader.ReadLineAsync();
-                            HandleProgressLine(line, ref lastUpdate);
-                        }
-
-                        while (!errorReader.EndOfStream)
-                        {
-                            var line = await errorReader.ReadLineAsync();
-                            HandleProgressLine(line, ref lastUpdate);
-                        }
-
-                        await Task.Delay(20);
-                    }
-                });
-
-                await process.WaitForExitAsync();
-                await reader;
-
-                Console.WriteLine(); // Move to next line after bar
-
-                if (process.ExitCode != 0)
-                {
-                    throw new Exception("Download failed");
+                    FileName = "yt-dlp",
+                    Arguments = $"-f {formatId} -o \"{outputTemplate}\" --newline \"{url}\"",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
                 }
-            }
-            catch (Exception ex)
+            };
+
+            await RunDownloadProcess(process);
+            
+            // Find the downloaded file
+            string[] possibleExtensions = { ".mp4", ".webm", ".mkv", ".flv", ".avi", ".mp3", ".m4a", ".webm", ".ogg" };
+            foreach (string ext in possibleExtensions)
             {
-                Console.WriteLine($"Download error: {ex.Message}");
-                throw;
+                string possiblePath = Path.Combine(directory, filename + "_" + type + ext);
+                if (File.Exists(possiblePath))
+                    return possiblePath;
+            }
+            
+            throw new FileNotFoundException($"Downloaded {type} file not found");
+        }
+
+        private static async Task RunDownloadProcess(Process process)
+        {
+            DateTime lastUpdate = DateTime.MinValue;
+            downloadTimer.Restart();
+
+            process.Start();
+
+            var outputTask = Task.Run(async () =>
+            {
+                while (!process.StandardOutput.EndOfStream)
+                {
+                    var line = await process.StandardOutput.ReadLineAsync();
+                    HandleProgressLine(line, ref lastUpdate);
+                }
+            });
+
+            var errorTask = Task.Run(async () =>
+            {
+                while (!process.StandardError.EndOfStream)
+                {
+                    var line = await process.StandardError.ReadLineAsync();
+                    HandleProgressLine(line, ref lastUpdate);
+                }
+            });
+
+            await process.WaitForExitAsync();
+            await Task.WhenAll(outputTask, errorTask);
+            
+            Console.WriteLine(); // Move to next line after progress bar
+
+            if (process.ExitCode != 0)
+            {
+                throw new Exception("Download failed");
             }
         }
 
-       private static void HandleProgressLine(string line, ref DateTime lastUpdate)
-{
-    if (string.IsNullOrEmpty(line)) return;
-
-    var match = progressRegex.Match(line);
-    if (match.Success)
-    {
-        if (!downloadTimer.IsRunning)
-            downloadTimer.Start();
-
-        if ((DateTime.Now - lastUpdate).TotalMilliseconds < 100)
-            return;
-
-        // Parse %
-        var percentStr = match.Groups["percent"].Value.Replace(",", ".");
-        double.TryParse(percentStr, NumberStyles.Any, CultureInfo.InvariantCulture, out double percentage);
-
-        // Total size
-        string total = null;
-        if (match.Groups["total"].Success)
-            total = match.Groups["total"].Value.Trim();
-        else if (match.Groups["total_only"].Success)
-            total = match.Groups["total_only"].Value.Trim();
-
-        // Downloaded
-        string downloaded;
-        if (match.Groups["downloaded"].Success)
-            downloaded = match.Groups["downloaded"].Value.Trim();
-        else if (!string.IsNullOrEmpty(total) && percentage > 0)
-            downloaded = CalculateDownloadedSize(percentage, total);
-        else
-            downloaded = "?";
-
-        if (string.IsNullOrEmpty(total))
-            total = "?";
-
-        // Speed (leave empty if not provided)
-        string speed = match.Groups["speed"].Success ? match.Groups["speed"].Value.Trim() : "";
-
-        // ETA — calculate if not provided
-        string eta;
-        if (percentage > 0 && percentage < 100)
+        private static async Task MergeVideoAudio(string videoFile, string audioFile, string outputFile)
         {
-            var elapsed = downloadTimer.Elapsed;
-            double remainingSeconds = (elapsed.TotalSeconds / (percentage / 100.0)) - elapsed.TotalSeconds;
-            eta = FormatTime(TimeSpan.FromSeconds(remainingSeconds));
-        }
-        else
-        {
-            eta = "00:00";
+            var process = new Process
+            {
+                StartInfo = new ProcessStartInfo
+                {
+                    FileName = "ffmpeg",
+                    Arguments = $"-i \"{videoFile}\" -i \"{audioFile}\" -c copy -map 0:v:0 -map 1:a:0 \"{outputFile}\"",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                }
+            };
+
+            process.OutputDataReceived += (sender, e) => { if (e.Data != null) Console.WriteLine(e.Data); };
+            process.ErrorDataReceived += (sender, e) => { if (e.Data != null) Console.WriteLine(e.Data); };
+
+            process.Start();
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
+            await process.WaitForExitAsync();
+
+            if (process.ExitCode != 0)
+            {
+                throw new Exception("Video/Audio merge failed");
+            }
         }
 
-        string elapsedStr = FormatTime(downloadTimer.Elapsed);
+        private static void HandleProgressLine(string line, ref DateTime lastUpdate)
+        {
+            if (string.IsNullOrEmpty(line)) return;
 
-        ShowProgressBar(percentage, downloaded, total, speed, eta, elapsedStr);
-        lastUpdate = DateTime.Now;
-    }
-    else
-    {
-        Console.WriteLine(line);
-    }
-}
+            var match = progressRegex.Match(line);
+            if (match.Success)
+            {
+                if (!downloadTimer.IsRunning)
+                    downloadTimer.Start();
 
-private static void ShowProgressBar(double percentage, string downloaded, string total, string speed, string eta, string elapsed)
-{
-    int barWidth = 40;
-    int completed = (int)(percentage / 100.0 * barWidth);
-    if (completed < 0) completed = 0;
-    if (completed > barWidth) completed = barWidth;
+                if ((DateTime.Now - lastUpdate).TotalMilliseconds < 100)
+                    return;
 
-    string progressBar = "[" +
-        new string('=', completed) +
-        (completed < barWidth ? ">" : "") +
-        new string('-', Math.Max(0, barWidth - completed - (completed < barWidth ? 1 : 0))) +
-        "]";
+                // Parse %
+                var percentStr = match.Groups["percent"].Value.Replace(",", ".");
+                double.TryParse(percentStr, NumberStyles.Any, CultureInfo.InvariantCulture, out double percentage);
 
-    string etaPart = !string.IsNullOrEmpty(eta) ? $" ETA:{eta}" : "";
-    string progressText = $"{progressBar} {percentage:F1}% ({downloaded}/{total}) {speed}{etaPart} Elapsed:{elapsed}".Trim();
+                // Total size
+                string total = null;
+                if (match.Groups["total"].Success)
+                    total = match.Groups["total"].Value.Trim();
+                else if (match.Groups["total_only"].Success)
+                    total = match.Groups["total_only"].Value.Trim();
 
-    int consoleWidth = 80;
-    try { consoleWidth = Console.WindowWidth; } catch { }
+                // Downloaded
+                string downloaded;
+                if (match.Groups["downloaded"].Success)
+                    downloaded = match.Groups["downloaded"].Value.Trim();
+                else if (!string.IsNullOrEmpty(total) && percentage > 0)
+                    downloaded = CalculateDownloadedSize(percentage, total);
+                else
+                    downloaded = "?";
 
-    if (progressText.Length > consoleWidth - 1)
-        progressText = progressText.Substring(0, Math.Max(0, consoleWidth - 4)) + "...";
+                if (string.IsNullOrEmpty(total))
+                    total = "?";
 
-    Console.Write("\r" + progressText.PadRight(consoleWidth - 1));
-}
+                // Speed
+                string speed = match.Groups["speed"].Success ? match.Groups["speed"].Value.Trim() : "";
 
-private static string FormatTime(TimeSpan time)
-{
-    return time.TotalHours >= 1 ? time.ToString(@"hh\:mm\:ss") : time.ToString(@"mm\:ss");
-}
+                // ETA
+                string eta;
+                if (percentage > 0 && percentage < 100)
+                {
+                    var elapsed = downloadTimer.Elapsed;
+                    double remainingSeconds = (elapsed.TotalSeconds / (percentage / 100.0)) - elapsed.TotalSeconds;
+                    eta = FormatTime(TimeSpan.FromSeconds(remainingSeconds));
+                }
+                else
+                {
+                    eta = "00:00";
+                }
 
-private static string CalculateDownloadedSize(double percentage, string total)
-{
-    // Example total: "227.22MiB"
-    var match = Regex.Match(total, @"(?<value>\d+(?:[.,]\d+)?)(?<unit>[KMGT]?i?B)", RegexOptions.IgnoreCase);
-    if (!match.Success) return $"{percentage:F1}%";
+                string elapsedStr = FormatTime(downloadTimer.Elapsed);
 
-    double.TryParse(match.Groups["value"].Value.Replace(",", "."), NumberStyles.Any, CultureInfo.InvariantCulture, out double totalValue);
-    string unit = match.Groups["unit"].Value;
+                ShowProgressBar(percentage, downloaded, total, speed, eta, elapsedStr);
+                lastUpdate = DateTime.Now;
+            }
+            else
+            {
+                Console.WriteLine(line);
+            }
+        }
 
-    double downloadedValue = (percentage / 100.0) * totalValue;
-    return $"{downloadedValue:F2}{unit}";
-}
+        private static void ShowProgressBar(double percentage, string downloaded, string total, string speed, string eta, string elapsed)
+        {
+            int barWidth = 40;
+            int completed = (int)(percentage / 100.0 * barWidth);
+            if (completed < 0) completed = 0;
+            if (completed > barWidth) completed = barWidth;
+
+            string progressBar = "[" +
+                new string('=', completed) +
+                (completed < barWidth ? ">" : "") +
+                new string('-', Math.Max(0, barWidth - completed - (completed < barWidth ? 1 : 0))) +
+                "]";
+
+            string etaPart = !string.IsNullOrEmpty(eta) ? $" ETA:{eta}" : "";
+            string progressText = $"{progressBar} {percentage:F1}% ({downloaded}/{total}) {speed}{etaPart} Elapsed:{elapsed}".Trim();
+
+            int consoleWidth = 80;
+            try { consoleWidth = Console.WindowWidth; } catch { }
+
+            if (progressText.Length > consoleWidth - 1)
+                progressText = progressText.Substring(0, Math.Max(0, consoleWidth - 4)) + "...";
+
+            Console.Write("\r" + progressText.PadRight(consoleWidth - 1));
+        }
+
+        private static string FormatTime(TimeSpan time)
+        {
+            return time.TotalHours >= 1 ? time.ToString(@"hh\:mm\:ss") : time.ToString(@"mm\:ss");
+        }
+
+        private static string CalculateDownloadedSize(double percentage, string total)
+        {
+            var match = Regex.Match(total, @"(?<value>\d+(?:[.,]\d+)?)(?<unit>[KMGT]?i?B)", RegexOptions.IgnoreCase);
+            if (!match.Success) return $"{percentage:F1}%";
+
+            double.TryParse(match.Groups["value"].Value.Replace(",", "."), NumberStyles.Any, CultureInfo.InvariantCulture, out double totalValue);
+            string unit = match.Groups["unit"].Value;
+
+            double downloadedValue = (percentage / 100.0) * totalValue;
+            return $"{downloadedValue:F2}{unit}";
+        }
     }
 }
